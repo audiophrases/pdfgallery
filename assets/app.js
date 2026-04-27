@@ -144,6 +144,83 @@
     if (commentsCache[folder] && Object.keys(commentsCache[folder]).length === 0) delete commentsCache[folder];
   }
 
+  // ---------- File operations (admin) ----------
+  async function ghDeleteFile(path, message) {
+    const api = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
+    const getRes = await fetch(`${api}/contents/${encodeURI(path)}?ref=${REPO_BRANCH}`, { headers: ghHeaders(true) });
+    if (!getRes.ok) throw new Error(`Lookup failed: HTTP ${getRes.status}`);
+    const meta = await getRes.json();
+    const delRes = await fetch(`${api}/contents/${encodeURI(path)}`, {
+      method: 'DELETE',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, ghHeaders(true)),
+      body: JSON.stringify({ message: message || `Delete ${path}`, sha: meta.sha, branch: REPO_BRANCH }),
+    });
+    if (!delRes.ok) throw new Error(`Delete failed (${delRes.status}): ${await delRes.text()}`);
+  }
+
+  // Atomic rename via Git Data API. Works for any file size; the Contents API
+  // truncates content for files >1MB so we can't simply re-PUT it under a new path.
+  async function ghMoveFile(oldPath, newPath) {
+    const api = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, ghHeaders(true));
+
+    const refRes = await fetch(`${api}/git/refs/heads/${REPO_BRANCH}`, { headers: ghHeaders(true) });
+    if (!refRes.ok) throw new Error(`ref: HTTP ${refRes.status}`);
+    const baseCommitSha = (await refRes.json()).object.sha;
+
+    const commitRes = await fetch(`${api}/git/commits/${baseCommitSha}`, { headers: ghHeaders(true) });
+    if (!commitRes.ok) throw new Error(`commit: HTTP ${commitRes.status}`);
+    const baseTreeSha = (await commitRes.json()).tree.sha;
+
+    const blobMetaRes = await fetch(`${api}/contents/${encodeURI(oldPath)}?ref=${REPO_BRANCH}`, { headers: ghHeaders(true) });
+    if (!blobMetaRes.ok) throw new Error(`blob meta: HTTP ${blobMetaRes.status}`);
+    const blobSha = (await blobMetaRes.json()).sha;
+
+    const treeRes = await fetch(`${api}/git/trees`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        base_tree: baseTreeSha,
+        tree: [
+          { path: oldPath, mode: '100644', type: 'blob', sha: null },
+          { path: newPath, mode: '100644', type: 'blob', sha: blobSha },
+        ],
+      }),
+    });
+    if (!treeRes.ok) throw new Error(`tree: HTTP ${treeRes.status} ${await treeRes.text()}`);
+    const newTreeSha = (await treeRes.json()).sha;
+
+    const newCommitRes = await fetch(`${api}/git/commits`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        message: `Rename ${oldPath} -> ${newPath}`,
+        tree: newTreeSha,
+        parents: [baseCommitSha],
+      }),
+    });
+    if (!newCommitRes.ok) throw new Error(`new commit: HTTP ${newCommitRes.status}`);
+    const newCommitSha = (await newCommitRes.json()).sha;
+
+    const updateRes = await fetch(`${api}/git/refs/heads/${REPO_BRANCH}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sha: newCommitSha }),
+    });
+    if (!updateRes.ok) throw new Error(`ref update: HTTP ${updateRes.status} ${await updateRes.text()}`);
+  }
+
+  function updateManifestRename(folder, oldName, newName) {
+    if (!manifestCache || !manifestCache[folder]) return;
+    manifestCache[folder].pdfs = manifestCache[folder].pdfs.map(n => n === oldName ? newName : n).sort();
+  }
+
+  function updateManifestDelete(folder, name) {
+    if (!manifestCache || !manifestCache[folder]) return;
+    manifestCache[folder].pdfs = manifestCache[folder].pdfs.filter(n => n !== name);
+    if (manifestCache[folder].pdfs.length === 0) delete manifestCache[folder];
+  }
+
   // ---------- PDF thumbnail rendering ----------
   async function renderThumbnail(canvas, pdfUrl) {
     const task = pdfjsLib.getDocument(pdfUrl);
@@ -311,12 +388,78 @@
       card.appendChild(badge);
     }
 
+    if (isAdmin()) {
+      card.appendChild(buildCardAdmin(folder, pdf));
+    }
+
     renderThumbnail(canvas, pdf.downloadUrl).catch(() => {
       const fallback = el('div', { class: 'thumb-error' }, 'Preview unavailable');
       canvas.replaceWith(fallback);
     });
 
     return card;
+  }
+
+  function buildCardAdmin(folder, pdf) {
+    const tools = el('div', { class: 'card-admin' });
+    const renameBtn = el('button', { class: 'card-admin-btn', onclick: () => doRename(folder, pdf, tools) }, 'Rename');
+    const deleteBtn = el('button', { class: 'card-admin-btn danger', onclick: () => doDelete(folder, pdf, tools) }, 'Delete');
+    tools.appendChild(renameBtn);
+    tools.appendChild(deleteBtn);
+    return tools;
+  }
+
+  function setToolsBusy(tools, msg) {
+    tools.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    let status = tools.querySelector('.card-admin-status');
+    if (!status) {
+      status = el('span', { class: 'card-admin-status' });
+      tools.appendChild(status);
+    }
+    status.textContent = msg;
+  }
+
+  async function doRename(folder, pdf, tools) {
+    if (!githubToken) { promptToken(); if (!githubToken) return; }
+    const newName = prompt('Rename PDF:', pdf.name);
+    if (!newName || newName === pdf.name) return;
+    if (!/\.pdf$/i.test(newName)) { alert('Filename must end in .pdf'); return; }
+    if (/[\\/:*?"<>|]/.test(newName)) { alert('Filename contains invalid characters.'); return; }
+    setToolsBusy(tools, 'Renaming…');
+    try {
+      await ghMoveFile(`${folder}/${pdf.name}`, `${folder}/${newName}`);
+      if (commentsCache && commentsCache[folder] && commentsCache[folder][pdf.name]) {
+        commentsCache[folder][newName] = commentsCache[folder][pdf.name];
+        delete commentsCache[folder][pdf.name];
+        try { await saveComments(); } catch (e) { console.warn('Comments update failed:', e); }
+      }
+      updateManifestRename(folder, pdf.name, newName);
+      rerender();
+    } catch (e) {
+      alert('Rename failed: ' + e.message);
+      setToolsBusy(tools, '');
+      tools.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    }
+  }
+
+  async function doDelete(folder, pdf, tools) {
+    if (!githubToken) { promptToken(); if (!githubToken) return; }
+    if (!confirm(`Delete "${pdf.name}"? This cannot be undone.`)) return;
+    setToolsBusy(tools, 'Deleting…');
+    try {
+      await ghDeleteFile(`${folder}/${pdf.name}`, `Delete ${folder}/${pdf.name}`);
+      if (commentsCache && commentsCache[folder] && commentsCache[folder][pdf.name]) {
+        delete commentsCache[folder][pdf.name];
+        if (Object.keys(commentsCache[folder]).length === 0) delete commentsCache[folder];
+        try { await saveComments(); } catch (e) { console.warn('Comments update failed:', e); }
+      }
+      updateManifestDelete(folder, pdf.name);
+      rerender();
+    } catch (e) {
+      alert('Delete failed: ' + e.message);
+      setToolsBusy(tools, '');
+      tools.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    }
   }
 
   function refreshBadge(card, folder, name) {
