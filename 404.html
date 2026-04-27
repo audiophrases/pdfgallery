@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PDF Gallery</title>
+  <script>
+    (function () {
+      var repo = 'pdfgallery';
+      var path = location.pathname;
+      var i = path.indexOf('/' + repo + '/');
+      var base = i >= 0 ? path.substring(0, i + repo.length + 2) : '/';
+      document.write('<base href="' + base + '">');
+    })();
+  </script>
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="assets/app.js"></script>
+</body>
+</html>
