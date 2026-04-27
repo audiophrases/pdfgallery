@@ -69,6 +69,14 @@
     return Object.keys(m).filter(k => !RESERVED_DIRS.has(k)).sort();
   }
 
+  async function resolveFolder(folder) {
+    const m = await loadManifest();
+    if (m[folder]) return folder;
+    const lower = folder.toLowerCase();
+    const match = Object.keys(m).find(k => k.toLowerCase() === lower);
+    return match || null;
+  }
+
   async function listPdfs(folder) {
     const m = await loadManifest();
     const entry = m[folder];
@@ -245,20 +253,28 @@
   // ---------- Render: gallery ----------
   async function renderGallery(root, folder) {
     root.innerHTML = '';
-    root.appendChild(el('header', { class: 'site-header' },
+    const header = el('header', { class: 'site-header' },
       el('a', { class: 'back', href: basePath() }, '← All galleries'),
       el('h1', null, folder),
       adminControls()
-    ));
+    );
+    root.appendChild(header);
     const main = el('main', { class: 'gallery' });
     root.appendChild(main);
 
     const status = el('p', { class: 'status' }, 'Loading…');
     main.appendChild(status);
 
-    let pdfs;
+    let pdfs, canonical;
     try {
-      const [p] = await Promise.all([listPdfs(folder), loadComments()]);
+      canonical = await resolveFolder(folder);
+      if (!canonical) {
+        status.remove();
+        main.appendChild(el('p', { class: 'empty' }, 'No PDFs in this folder.'));
+        return;
+      }
+      header.querySelector('h1').textContent = canonical;
+      const [p] = await Promise.all([listPdfs(canonical), loadComments()]);
       pdfs = p;
     } catch (e) {
       status.remove();
@@ -274,7 +290,7 @@
 
     const grid = el('div', { class: 'grid' });
     main.appendChild(grid);
-    for (const pdf of pdfs) grid.appendChild(buildCard(folder, pdf));
+    for (const pdf of pdfs) grid.appendChild(buildCard(canonical, pdf));
   }
 
   function buildCard(folder, pdf) {
