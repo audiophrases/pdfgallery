@@ -1,0 +1,42 @@
+name: Build gallery manifest
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'gallery.json'
+      - 'comments.json'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-manifests
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate gallery.json
+        run: node scripts/build-manifests.mjs
+
+      - name: Commit if changed
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --quiet -- gallery.json; then
+            echo "No changes to gallery.json."
+          else
+            git add gallery.json
+            git commit -m "Update gallery.json"
+            git push
+          fi

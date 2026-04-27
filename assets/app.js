@@ -52,70 +52,70 @@
     return decodeURIComponent(last);
   }
 
-  // ---------- GitHub API ----------
-  async function ghContents(folder) {
-    const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${folder ? encodeURIComponent(folder) : ''}?ref=${REPO_BRANCH}`;
-    const res = await fetch(url, { headers: ghHeaders(true) });
-    if (res.status === 404) return [];
-    if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
-    return res.json();
+  // ---------- Manifest (built by .github/workflows/build-manifests.yml) ----------
+  // Static reads avoid the unauthenticated GitHub API rate limit (60/hr/IP).
+  let manifestCache = null;
+
+  async function loadManifest() {
+    if (manifestCache) return manifestCache;
+    const res = await fetch(basePath() + 'gallery.json?t=' + Date.now(), { cache: 'no-cache' });
+    if (!res.ok) throw new Error('gallery.json: HTTP ' + res.status);
+    manifestCache = await res.json();
+    return manifestCache;
   }
 
   async function listFolders() {
-    const items = await ghContents('');
-    return items
-      .filter(i => i.type === 'dir' && !i.name.startsWith('.') && !RESERVED_DIRS.has(i.name))
-      .map(i => i.name)
-      .sort();
+    const m = await loadManifest();
+    return Object.keys(m).filter(k => !RESERVED_DIRS.has(k)).sort();
   }
 
   async function listPdfs(folder) {
-    const items = await ghContents(folder);
-    return items
-      .filter(i => i.type === 'file' && i.name.toLowerCase().endsWith('.pdf'))
-      .map(i => ({ name: i.name, downloadUrl: i.download_url, path: i.path }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const m = await loadManifest();
+    const entry = m[folder];
+    if (!entry || !Array.isArray(entry.pdfs)) return [];
+    return entry.pdfs.slice().sort().map(name => ({
+      name,
+      downloadUrl: basePath() + encodeURIComponent(folder) + '/' + encodeURIComponent(name),
+    }));
   }
 
   // ---------- Comments store (comments.json in repo) ----------
+  // Reads: static fetch of comments.json (served by GH Pages, no API).
+  // Writes: GitHub Contents API, authenticated with admin token (5000/hr).
   let commentsCache = null;
-  let commentsSha = null;
 
   async function loadComments() {
+    const res = await fetch(basePath() + COMMENTS_PATH + '?t=' + Date.now(), { cache: 'no-cache' });
+    if (res.status === 404) { commentsCache = {}; return commentsCache; }
+    if (!res.ok) throw new Error('comments.json: HTTP ' + res.status);
+    try { commentsCache = await res.json(); } catch { commentsCache = {}; }
+    if (!commentsCache || typeof commentsCache !== 'object') commentsCache = {};
+    return commentsCache;
+  }
+
+  async function fetchCommentsSha() {
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${COMMENTS_PATH}?ref=${REPO_BRANCH}`;
     const res = await fetch(url, { headers: ghHeaders(true) });
-    if (res.status === 404) {
-      commentsCache = {};
-      commentsSha = null;
-      return commentsCache;
-    }
-    if (!res.ok) throw new Error(`Failed to load comments (${res.status})`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('Failed to fetch comments sha: HTTP ' + res.status);
     const meta = await res.json();
-    commentsSha = meta.sha;
-    try {
-      const decoded = atob((meta.content || '').replace(/\n/g, ''));
-      commentsCache = JSON.parse(decodeURIComponent(escape(decoded))) || {};
-    } catch (e) {
-      commentsCache = {};
-    }
-    return commentsCache;
+    return meta.sha || null;
   }
 
   async function saveComments() {
     if (!githubToken) throw new Error('GitHub token required to save comments.');
+    const sha = await fetchCommentsSha();
     const json = JSON.stringify(commentsCache, null, 2);
     const encoded = btoa(unescape(encodeURIComponent(json)));
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${COMMENTS_PATH}`;
     const body = { message: 'Update comments', content: encoded, branch: REPO_BRANCH };
-    if (commentsSha) body.sha = commentsSha;
+    if (sha) body.sha = sha;
     const res = await fetch(url, {
       method: 'PUT',
       headers: Object.assign({ 'Content-Type': 'application/json' }, ghHeaders(true)),
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text()}`);
-    const out = await res.json();
-    commentsSha = out.content && out.content.sha;
   }
 
   function getCommentsFor(folder, name) {
