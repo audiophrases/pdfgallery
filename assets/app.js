@@ -399,38 +399,20 @@
   }
 
   // ---------- PDF viewer overlay ----------
-  // raw.githubusercontent.com serves PDFs with Content-Disposition: attachment,
-  // which makes browsers download instead of display. Fetch as a blob and re-serve
-  // with application/pdf so the iframe renders it inline.
-  async function openViewer(pdf) {
+  function openViewer(pdf) {
     const overlay = el('div', {
       class: 'viewer-overlay',
       onclick: (e) => { if (e.target === overlay) cleanup(); },
     });
-    const close = el('button', { class: 'viewer-close', title: 'Close', onclick: () => cleanup() }, '×');
-    const frame = el('iframe', { class: 'viewer-frame' });
-    overlay.appendChild(close);
-    overlay.appendChild(frame);
-    document.body.appendChild(overlay);
-
-    let blobUrl = null;
     function cleanup() {
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
       overlay.remove();
       document.removeEventListener('keydown', onKey);
     }
     const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
     document.addEventListener('keydown', onKey);
-
-    try {
-      const res = await fetch(pdf.downloadUrl);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const buf = await res.arrayBuffer();
-      blobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
-      frame.src = blobUrl;
-    } catch (err) {
-      frame.replaceWith(el('p', { class: 'error', style: 'color:white;padding:24px;' }, 'Failed to load PDF: ' + err.message));
-    }
+    overlay.appendChild(el('button', { class: 'viewer-close', title: 'Close', onclick: cleanup }, '×'));
+    overlay.appendChild(el('iframe', { class: 'viewer-frame', src: pdf.downloadUrl }));
+    document.body.appendChild(overlay);
   }
 
   // ---------- Boot ----------
