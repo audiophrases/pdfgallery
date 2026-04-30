@@ -305,6 +305,11 @@
     const main = el('main', { class: 'landing' });
     root.appendChild(main);
 
+    if (!isAdmin()) {
+      main.appendChild(el('p', { class: 'empty' }, 'Open the link you were given to view your gallery.'));
+      return;
+    }
+
     main.appendChild(el('p', { class: 'status' }, 'Loading folders…'));
 
     let folders;
@@ -331,7 +336,6 @@
   async function renderGallery(root, folder) {
     root.innerHTML = '';
     const header = el('header', { class: 'site-header' },
-      el('a', { class: 'back', href: basePath() }, '← All galleries'),
       el('h1', null, folder),
       adminControls()
     );
