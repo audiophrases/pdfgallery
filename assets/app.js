@@ -239,6 +239,7 @@
   // ---------- Admin state ----------
   let adminUnlocked = sessionStorage.getItem('pdfgallery_admin') === '1';
   let githubToken = localStorage.getItem('pdfgallery_token') || '';
+  let landingPromptShown = false;
 
   function isAdmin() { return adminUnlocked; }
 
@@ -280,10 +281,7 @@
   // ---------- Render: header / admin controls ----------
   function adminControls() {
     const wrap = el('div', { class: 'admin-controls' });
-    if (!isAdmin()) {
-      wrap.appendChild(el('button', { class: 'admin-btn', onclick: promptLogin }, 'Admin login'));
-      return wrap;
-    }
+    if (!isAdmin()) return wrap;
     wrap.appendChild(el('span', { class: 'admin-status' }, 'Admin'));
     if (!githubToken) {
       wrap.appendChild(el('button', { class: 'admin-btn', onclick: promptToken }, 'Set GitHub token'));
@@ -306,6 +304,11 @@
     root.appendChild(main);
 
     if (!isAdmin()) {
+      if (!landingPromptShown) {
+        landingPromptShown = true;
+        promptLogin();
+        if (isAdmin()) return;
+      }
       main.appendChild(el('p', { class: 'empty' }, 'Open the link you were given to view your gallery.'));
       return;
     }
