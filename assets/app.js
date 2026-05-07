@@ -9,6 +9,7 @@
   const PDF_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const RESERVED_DIRS = new Set(['assets', 'scripts', '.git', '.github', 'node_modules']);
   const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+  const LOCAL_API_ORIGIN = 'http://127.0.0.1:8080';
 
   // ---------- helpers ----------
   function el(tag, attrs, ...children) {
@@ -58,7 +59,8 @@
   }
 
   function localApiUrl(path) {
-    return '/api/local/' + path.replace(/^\/+/, '');
+    const apiPath = '/api/local/' + path.replace(/^\/+/, '');
+    return isLocalDev() ? apiPath : LOCAL_API_ORIGIN + apiPath;
   }
 
   async function localApi(path, payload) {
@@ -71,8 +73,21 @@
     return res.json().catch(() => ({}));
   }
 
-  function ensureWriteAccess() {
+  let localServerReadyPromise = null;
+
+  async function localServerReady() {
     if (isLocalDev()) return true;
+    if (!location.protocol.startsWith('http')) return false;
+    if (!localServerReadyPromise) {
+      localServerReadyPromise = fetch(localApiUrl('ping'), { cache: 'no-store' })
+        .then(res => res.ok)
+        .catch(() => false);
+    }
+    return localServerReadyPromise;
+  }
+
+  async function ensureWriteAccess() {
+    if (await localServerReady()) return true;
     if (!githubToken) promptToken();
     return Boolean(githubToken);
   }
@@ -114,8 +129,13 @@
 
   // ---------- Comments store (comments.json in repo) ----------
   // Reads: static fetch of comments.json (served by GH Pages, no API).
-  // Writes: local dev server on localhost, otherwise GitHub Contents API.
+  // Writes: local dev server when available, otherwise GitHub Contents API.
   let commentsCache = null;
+  let localSaveQueue = Promise.resolve();
+
+  function cloneComments() {
+    return JSON.parse(JSON.stringify(commentsCache || {}));
+  }
 
   async function loadComments() {
     const res = await fetch(basePath() + COMMENTS_PATH + '?t=' + Date.now(), { cache: 'no-cache' });
@@ -136,8 +156,14 @@
   }
 
   async function saveComments() {
-    if (isLocalDev()) {
-      await localApi('comments', commentsCache || {});
+    if (await localServerReady()) {
+      const payload = cloneComments();
+      const pending = localSaveQueue.then(
+        () => localApi('comments', payload),
+        () => localApi('comments', payload)
+      );
+      localSaveQueue = pending.catch(() => {});
+      await pending;
       return;
     }
     if (!githubToken) throw new Error('GitHub token required to save comments.');
