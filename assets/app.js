@@ -74,14 +74,25 @@
   }
 
   let localServerReadyPromise = null;
+  let localServerAvailable = null;
 
   async function localServerReady() {
-    if (isLocalDev()) return true;
-    if (!location.protocol.startsWith('http')) return false;
+    if (isLocalDev()) {
+      localServerAvailable = true;
+      return true;
+    }
+    if (!location.protocol.startsWith('http')) {
+      localServerAvailable = false;
+      return false;
+    }
     if (!localServerReadyPromise) {
       localServerReadyPromise = fetch(localApiUrl('ping'), { cache: 'no-store' })
         .then(res => res.ok)
-        .catch(() => false);
+        .catch(() => false)
+        .then(ready => {
+          localServerAvailable = ready;
+          return ready;
+        });
     }
     return localServerReadyPromise;
   }
@@ -138,7 +149,10 @@
   }
 
   async function loadComments() {
-    const res = await fetch(basePath() + COMMENTS_PATH + '?t=' + Date.now(), { cache: 'no-cache' });
+    const url = await localServerReady()
+      ? localApiUrl('comments') + '?t=' + Date.now()
+      : basePath() + COMMENTS_PATH + '?t=' + Date.now();
+    const res = await fetch(url, { cache: 'no-cache' });
     if (res.status === 404) { commentsCache = {}; return commentsCache; }
     if (!res.ok) throw new Error('comments.json: HTTP ' + res.status);
     try { commentsCache = await res.json(); } catch { commentsCache = {}; }
@@ -222,7 +236,7 @@
   }
 
   async function deleteFile(path, message) {
-    if (isLocalDev()) {
+    if (await localServerReady()) {
       await localApi('delete', { path });
       return;
     }
@@ -282,7 +296,7 @@
   }
 
   async function moveFile(oldPath, newPath) {
-    if (isLocalDev()) {
+    if (await localServerReady()) {
       await localApi('rename', { oldPath, newPath });
       return;
     }
@@ -365,7 +379,7 @@
       return wrap;
     }
     wrap.appendChild(el('span', { class: 'admin-status' }, 'Admin'));
-    if (isLocalDev()) {
+    if (isLocalDev() || localServerAvailable) {
       wrap.appendChild(el('span', { class: 'admin-status local' }, 'Local edits'));
     } else if (!githubToken) {
       wrap.appendChild(el('button', { class: 'admin-btn', onclick: promptToken }, 'Set GitHub token'));
