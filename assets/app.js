@@ -511,7 +511,7 @@
   }
 
   async function doRename(folder, pdf, tools) {
-    if (!ensureWriteAccess()) return;
+    if (!await ensureWriteAccess()) return;
     const newName = prompt('Rename PDF:', pdf.name);
     if (!newName || newName === pdf.name) return;
     if (!/\.pdf$/i.test(newName)) { alert('Filename must end in .pdf'); return; }
@@ -534,7 +534,7 @@
   }
 
   async function doDelete(folder, pdf, tools) {
-    if (!ensureWriteAccess()) return;
+    if (!await ensureWriteAccess()) return;
     if (!confirm(`Delete "${pdf.name}"? This cannot be undone.`)) return;
     setToolsBusy(tools, 'Deleting…');
     try {
@@ -596,7 +596,7 @@
             title: 'Delete comment',
             onclick: async () => {
               if (!confirm('Delete this comment?')) return;
-              if (!ensureWriteAccess()) return;
+              if (!await ensureWriteAccess()) return;
               const snapshot = JSON.parse(JSON.stringify(commentsCache));
               removeCommentLocal(folder, name, idx);
               try {
@@ -625,7 +625,7 @@
         e.preventDefault();
         const text = ta.value.trim();
         if (!text) return;
-        if (!ensureWriteAccess()) return;
+        if (!await ensureWriteAccess()) return;
         submit.disabled = true;
         submit.textContent = 'Posting…';
         const snapshot = JSON.parse(JSON.stringify(commentsCache));
