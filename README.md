@@ -21,8 +21,9 @@ No per-folder `index.html` is needed; the SPA fallback ([`404.html`](404.html)) 
 ## Admin and comments
 
 - Click **Admin login** in the header. Password is hardcoded in [`assets/app.js`](assets/app.js) (`ADMIN_PASSWORD`).
-- After logging in, click **Set GitHub token**. Paste a fine-grained Personal Access Token with **Contents: Read and write** permission for `audiophrases/pdfgallery`. Create one at https://github.com/settings/personal-access-tokens. The token is stored in the admin's browser `localStorage`.
-- Each thumbnail then shows a comment badge. Click it to expand the panel, then post or delete comments. Posts commit changes to [`comments.json`](comments.json) via the GitHub API.
+- On GitHub Pages, after logging in, click **Set GitHub token**. Paste a fine-grained Personal Access Token with **Contents: Read and write** permission for `audiophrases/pdfgallery`. Create one at https://github.com/settings/personal-access-tokens. The token is stored in the admin's browser `localStorage`.
+- For local editing, run [`scripts/dev-server.mjs`](scripts/dev-server.mjs) instead. Local admin changes write directly to files in this checkout, so you can review and push them with git.
+- Each thumbnail then shows a comment badge. Click it to expand the panel, then post or delete comments. Local posts update [`comments.json`](comments.json); GitHub Pages posts commit changes through the GitHub API.
 - A thumbnail with one or more comments shows the badge to all visitors. Visitors without admin access can read but not edit.
 
 ## Why a manifest?
@@ -42,6 +43,7 @@ Visitor reads (folder list, PDF list, comments) are static fetches against GitHu
 ## Local dev
 
 ```sh
-node scripts/build-manifests.mjs   # regenerate gallery.json from local folders
-npx http-server . -p 8080          # serve at http://localhost:8080/
+node scripts/dev-server.mjs        # serve and enable local edits at http://127.0.0.1:8080/
 ```
+
+The local server saves comments to `comments.json`, renames/deletes PDFs on disk, and regenerates `gallery.json` after PDF edits. Commit the changed files when the gallery looks right.

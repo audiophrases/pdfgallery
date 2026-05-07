@@ -8,6 +8,7 @@
   const COMMENTS_PATH = 'comments.json';
   const PDF_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const RESERVED_DIRS = new Set(['assets', 'scripts', '.git', '.github', 'node_modules']);
+  const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
   // ---------- helpers ----------
   function el(tag, attrs, ...children) {
@@ -52,6 +53,30 @@
     return decodeURIComponent(last);
   }
 
+  function isLocalDev() {
+    return location.protocol.startsWith('http') && LOCAL_HOSTS.has(location.hostname);
+  }
+
+  function localApiUrl(path) {
+    return '/api/local/' + path.replace(/^\/+/, '');
+  }
+
+  async function localApi(path, payload) {
+    const res = await fetch(localApiUrl(path), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    if (!res.ok) throw new Error(`Local save failed (${res.status}): ${await res.text()}`);
+    return res.json().catch(() => ({}));
+  }
+
+  function ensureWriteAccess() {
+    if (isLocalDev()) return true;
+    if (!githubToken) promptToken();
+    return Boolean(githubToken);
+  }
+
   // ---------- Manifest (built by .github/workflows/build-manifests.yml) ----------
   // Static reads avoid the unauthenticated GitHub API rate limit (60/hr/IP).
   let manifestCache = null;
@@ -89,7 +114,7 @@
 
   // ---------- Comments store (comments.json in repo) ----------
   // Reads: static fetch of comments.json (served by GH Pages, no API).
-  // Writes: GitHub Contents API, authenticated with admin token (5000/hr).
+  // Writes: local dev server on localhost, otherwise GitHub Contents API.
   let commentsCache = null;
 
   async function loadComments() {
@@ -103,7 +128,7 @@
 
   async function fetchCommentsSha() {
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${COMMENTS_PATH}?ref=${REPO_BRANCH}`;
-    const res = await fetch(url, { headers: ghHeaders(true) });
+    const res = await fetch(url, { headers: ghHeaders(true), cache: 'no-store' });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('Failed to fetch comments sha: HTTP ' + res.status);
     const meta = await res.json();
@@ -111,19 +136,31 @@
   }
 
   async function saveComments() {
+    if (isLocalDev()) {
+      await localApi('comments', commentsCache || {});
+      return;
+    }
     if (!githubToken) throw new Error('GitHub token required to save comments.');
-    const sha = await fetchCommentsSha();
     const json = JSON.stringify(commentsCache, null, 2);
     const encoded = btoa(unescape(encodeURIComponent(json)));
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${COMMENTS_PATH}`;
-    const body = { message: 'Update comments', content: encoded, branch: REPO_BRANCH };
-    if (sha) body.sha = sha;
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, ghHeaders(true)),
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text()}`);
+    let lastError = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const sha = await fetchCommentsSha();
+      const body = { message: 'Update comments', content: encoded, branch: REPO_BRANCH };
+      if (sha) body.sha = sha;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, ghHeaders(true)),
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return;
+      lastError = await res.text();
+      if (res.status !== 409 || attempt === 1) {
+        throw new Error(`Save failed (${res.status}): ${lastError}`);
+      }
+    }
+    throw new Error('Save failed: ' + lastError);
   }
 
   function getCommentsFor(folder, name) {
@@ -156,6 +193,14 @@
       body: JSON.stringify({ message: message || `Delete ${path}`, sha: meta.sha, branch: REPO_BRANCH }),
     });
     if (!delRes.ok) throw new Error(`Delete failed (${delRes.status}): ${await delRes.text()}`);
+  }
+
+  async function deleteFile(path, message) {
+    if (isLocalDev()) {
+      await localApi('delete', { path });
+      return;
+    }
+    await ghDeleteFile(path, message);
   }
 
   // Atomic rename via Git Data API. Works for any file size; the Contents API
@@ -208,6 +253,14 @@
       body: JSON.stringify({ sha: newCommitSha }),
     });
     if (!updateRes.ok) throw new Error(`ref update: HTTP ${updateRes.status} ${await updateRes.text()}`);
+  }
+
+  async function moveFile(oldPath, newPath) {
+    if (isLocalDev()) {
+      await localApi('rename', { oldPath, newPath });
+      return;
+    }
+    await ghMoveFile(oldPath, newPath);
   }
 
   function updateManifestRename(folder, oldName, newName) {
@@ -281,9 +334,14 @@
   // ---------- Render: header / admin controls ----------
   function adminControls() {
     const wrap = el('div', { class: 'admin-controls' });
-    if (!isAdmin()) return wrap;
+    if (!isAdmin()) {
+      wrap.appendChild(el('button', { class: 'admin-btn', onclick: promptLogin }, 'Admin login'));
+      return wrap;
+    }
     wrap.appendChild(el('span', { class: 'admin-status' }, 'Admin'));
-    if (!githubToken) {
+    if (isLocalDev()) {
+      wrap.appendChild(el('span', { class: 'admin-status local' }, 'Local edits'));
+    } else if (!githubToken) {
       wrap.appendChild(el('button', { class: 'admin-btn', onclick: promptToken }, 'Set GitHub token'));
     } else {
       wrap.appendChild(el('button', { class: 'admin-btn', onclick: promptToken }, 'Update token'));
@@ -427,14 +485,14 @@
   }
 
   async function doRename(folder, pdf, tools) {
-    if (!githubToken) { promptToken(); if (!githubToken) return; }
+    if (!ensureWriteAccess()) return;
     const newName = prompt('Rename PDF:', pdf.name);
     if (!newName || newName === pdf.name) return;
     if (!/\.pdf$/i.test(newName)) { alert('Filename must end in .pdf'); return; }
     if (/[\\/:*?"<>|]/.test(newName)) { alert('Filename contains invalid characters.'); return; }
     setToolsBusy(tools, 'Renaming…');
     try {
-      await ghMoveFile(`${folder}/${pdf.name}`, `${folder}/${newName}`);
+      await moveFile(`${folder}/${pdf.name}`, `${folder}/${newName}`);
       if (commentsCache && commentsCache[folder] && commentsCache[folder][pdf.name]) {
         commentsCache[folder][newName] = commentsCache[folder][pdf.name];
         delete commentsCache[folder][pdf.name];
@@ -450,11 +508,11 @@
   }
 
   async function doDelete(folder, pdf, tools) {
-    if (!githubToken) { promptToken(); if (!githubToken) return; }
+    if (!ensureWriteAccess()) return;
     if (!confirm(`Delete "${pdf.name}"? This cannot be undone.`)) return;
     setToolsBusy(tools, 'Deleting…');
     try {
-      await ghDeleteFile(`${folder}/${pdf.name}`, `Delete ${folder}/${pdf.name}`);
+      await deleteFile(`${folder}/${pdf.name}`, `Delete ${folder}/${pdf.name}`);
       if (commentsCache && commentsCache[folder] && commentsCache[folder][pdf.name]) {
         delete commentsCache[folder][pdf.name];
         if (Object.keys(commentsCache[folder]).length === 0) delete commentsCache[folder];
@@ -512,7 +570,7 @@
             title: 'Delete comment',
             onclick: async () => {
               if (!confirm('Delete this comment?')) return;
-              if (!githubToken) { promptToken(); if (!githubToken) return; }
+              if (!ensureWriteAccess()) return;
               const snapshot = JSON.parse(JSON.stringify(commentsCache));
               removeCommentLocal(folder, name, idx);
               try {
@@ -541,7 +599,7 @@
         e.preventDefault();
         const text = ta.value.trim();
         if (!text) return;
-        if (!githubToken) { promptToken(); if (!githubToken) return; }
+        if (!ensureWriteAccess()) return;
         submit.disabled = true;
         submit.textContent = 'Posting…';
         const snapshot = JSON.parse(JSON.stringify(commentsCache));
