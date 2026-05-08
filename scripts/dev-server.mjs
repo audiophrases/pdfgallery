@@ -24,16 +24,34 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+let writeQueue = Promise.resolve();
+
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Private-Network': 'true',
+  };
+}
+
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
     'Content-Type': type,
     'Cache-Control': 'no-store',
+    ...corsHeaders(),
   });
   res.end(body);
 }
 
 function sendJson(res, status, body) {
   send(res, status, JSON.stringify(body), MIME['.json']);
+}
+
+async function enqueueWrite(task) {
+  const pending = writeQueue.then(task, task);
+  writeQueue = pending.catch(() => {});
+  return pending;
 }
 
 function isInsideRoot(path) {
@@ -100,6 +118,22 @@ async function readBody(req) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/local/ping') {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/local/comments') {
+    try {
+      const text = await readFile(join(root, 'comments.json'), 'utf8');
+      send(res, 200, text, MIME['.json']);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') sendJson(res, 200, {});
+      else throw err;
+    }
+    return;
+  }
+
   if (req.method !== 'POST') {
     send(res, 405, 'Method not allowed');
     return;
@@ -111,32 +145,36 @@ async function handleApi(req, res, url) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       throw new Error('Comments payload must be an object.');
     }
-    await writeFile(join(root, 'comments.json'), JSON.stringify(body, null, 2) + '\n');
+    await enqueueWrite(() => writeFile(join(root, 'comments.json'), JSON.stringify(body, null, 2) + '\n'));
     sendJson(res, 200, { ok: true });
     return;
   }
 
   if (url.pathname === '/api/local/rename') {
-    const oldFile = pdfPath(body.oldPath);
-    const newFile = pdfPath(body.newPath);
-    if (oldFile.folder !== newFile.folder) throw new Error('Rename must stay in the same folder.');
-    await access(oldFile.path, constants.F_OK);
-    try {
-      await access(newFile.path, constants.F_OK);
-      throw new Error('A file with that name already exists.');
-    } catch (err) {
-      if (err && err.code !== 'ENOENT') throw err;
-    }
-    await rename(oldFile.path, newFile.path);
-    await buildManifest();
+    await enqueueWrite(async () => {
+      const oldFile = pdfPath(body.oldPath);
+      const newFile = pdfPath(body.newPath);
+      if (oldFile.folder !== newFile.folder) throw new Error('Rename must stay in the same folder.');
+      await access(oldFile.path, constants.F_OK);
+      try {
+        await access(newFile.path, constants.F_OK);
+        throw new Error('A file with that name already exists.');
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') throw err;
+      }
+      await rename(oldFile.path, newFile.path);
+      await buildManifest();
+    });
     sendJson(res, 200, { ok: true });
     return;
   }
 
   if (url.pathname === '/api/local/delete') {
-    const file = pdfPath(body.path);
-    await rm(file.path);
-    await buildManifest();
+    await enqueueWrite(async () => {
+      const file = pdfPath(body.path);
+      await rm(file.path);
+      await buildManifest();
+    });
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -176,6 +214,10 @@ async function serveStatic(req, res, url) {
 
 const server = createServer(async (req, res) => {
   try {
+    if (req.method === 'OPTIONS') {
+      send(res, 204, '');
+      return;
+    }
     const url = new URL(req.url || '/', `http://${req.headers.host || `${host}:${port}`}`);
     if (url.pathname.startsWith('/api/local/')) {
       await handleApi(req, res, url);

@@ -696,6 +696,9 @@
     }
     pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
     rerender();
+    if (!isLocalDev()) {
+      localServerReady().then(ready => { if (ready) rerender(); });
+    }
   }
 
   if (document.readyState === 'loading') {
