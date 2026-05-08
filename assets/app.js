@@ -531,19 +531,47 @@
     if (!/\.pdf$/i.test(newName)) { alert('Filename must end in .pdf'); return; }
     if (/[\\/:*?"<>|]/.test(newName)) { alert('Filename contains invalid characters.'); return; }
     setToolsBusy(tools, 'Renaming…');
+
+    function reenableTools() {
+      setToolsBusy(tools, '');
+      tools.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    }
+
+    // Move comments first so failures abort the rename rather than orphaning data.
+    const hasComments = !!(commentsCache && commentsCache[folder] && commentsCache[folder][pdf.name] && commentsCache[folder][pdf.name].length);
+    const commentsSnapshot = hasComments ? cloneComments() : null;
+    if (hasComments) {
+      if (commentsCache[folder][newName]) {
+        if (!confirm(`"${newName}" already has comments attached. Merge the existing comments into it?`)) {
+          reenableTools();
+          return;
+        }
+        commentsCache[folder][newName] = commentsCache[folder][newName].concat(commentsCache[folder][pdf.name]);
+      } else {
+        commentsCache[folder][newName] = commentsCache[folder][pdf.name];
+      }
+      delete commentsCache[folder][pdf.name];
+      try {
+        await saveComments();
+      } catch (e) {
+        commentsCache = commentsSnapshot;
+        alert('Rename aborted: could not move comments. ' + e.message);
+        reenableTools();
+        return;
+      }
+    }
+
     try {
       await moveFile(`${folder}/${pdf.name}`, `${folder}/${newName}`);
-      if (commentsCache && commentsCache[folder] && commentsCache[folder][pdf.name]) {
-        commentsCache[folder][newName] = commentsCache[folder][pdf.name];
-        delete commentsCache[folder][pdf.name];
-        try { await saveComments(); } catch (e) { console.warn('Comments update failed:', e); }
-      }
       updateManifestRename(folder, pdf.name, newName);
       rerender();
     } catch (e) {
+      if (hasComments) {
+        commentsCache = commentsSnapshot;
+        try { await saveComments(); } catch (revertErr) { console.warn('Failed to revert comments after rename failure:', revertErr); }
+      }
       alert('Rename failed: ' + e.message);
-      setToolsBusy(tools, '');
-      tools.querySelectorAll('button').forEach(b => { b.disabled = false; });
+      reenableTools();
     }
   }
 
