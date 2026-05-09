@@ -336,8 +336,8 @@
 
   function isAdmin() { return adminUnlocked; }
 
-  function promptLogin() {
-    const pw = prompt('Admin password:');
+  async function promptLogin() {
+    const pw = await passwordPrompt('Admin password:');
     if (pw === null) return;
     if (pw === ADMIN_PASSWORD) {
       adminUnlocked = true;
@@ -346,6 +346,38 @@
     } else {
       alert('Incorrect password.');
     }
+  }
+
+  function passwordPrompt(message) {
+    return new Promise((resolve) => {
+      const overlay = el('div', { class: 'pw-modal-overlay' });
+      const input = el('input', { type: 'password', class: 'pw-modal-input', autocomplete: 'current-password' });
+      const okBtn = el('button', { class: 'admin-btn' }, 'OK');
+      const cancelBtn = el('button', { class: 'admin-btn' }, 'Cancel');
+      const dialog = el('div', { class: 'pw-modal' },
+        el('div', { class: 'pw-modal-msg' }, message),
+        input,
+        el('div', { class: 'pw-modal-actions' }, cancelBtn, okBtn)
+      );
+      overlay.appendChild(dialog);
+
+      function close(value) {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        resolve(value);
+      }
+      function onKey(e) {
+        if (e.key === 'Enter') { e.preventDefault(); close(input.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      }
+      okBtn.addEventListener('click', () => close(input.value));
+      cancelBtn.addEventListener('click', () => close(null));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+      document.addEventListener('keydown', onKey);
+
+      document.body.appendChild(overlay);
+      input.focus();
+    });
   }
 
   function promptToken() {
