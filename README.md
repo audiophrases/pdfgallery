@@ -20,7 +20,7 @@ No per-folder `index.html` is needed; the SPA fallback ([`404.html`](404.html)) 
 
 ## Admin and comments
 
-- Click **Admin login** in the header. Password is hardcoded in [`assets/app.js`](assets/app.js) (`ADMIN_PASSWORD`).
+- Click **Admin login** in the header. The password's SHA-256 hash is hardcoded in [`assets/app.js`](assets/app.js) (`ADMIN_PASSWORD_SHA256`); the entered password is hashed in the browser and compared. To change it, compute a new hash with `node -e "crypto.subtle.digest('SHA-256', new TextEncoder().encode('NEW_PW')).then(b => console.log(Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')))"`.
 - On GitHub Pages, after logging in, click **Set GitHub token**. Paste a fine-grained Personal Access Token with **Contents: Read and write** permission for `audiophrases/pdfgallery`. Create one at https://github.com/settings/personal-access-tokens. The token is stored in the admin's browser `localStorage`.
 - For local editing, run [`scripts/dev-server.mjs`](scripts/dev-server.mjs) instead. Local admin changes write directly to files in this checkout, so you can review and push them with git.
 - Each thumbnail then shows a comment badge. Click it to expand the panel, then post or delete comments. Local posts update [`comments.json`](comments.json); GitHub Pages posts commit changes through the GitHub API.
