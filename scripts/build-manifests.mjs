@@ -27,9 +27,17 @@ function listPdfs(p) {
 }
 
 const manifest = {};
+
+function collectFolders(dir, relPath) {
+  const pdfs = listPdfs(dir);
+  if (pdfs.length > 0) manifest[relPath] = { pdfs };
+  for (const sub of listSubdirs(dir)) {
+    collectFolders(join(dir, sub), relPath + '/' + sub);
+  }
+}
+
 for (const folder of listSubdirs(root)) {
-  const pdfs = listPdfs(join(root, folder));
-  if (pdfs.length > 0) manifest[folder] = { pdfs };
+  collectFolders(join(root, folder), folder);
 }
 
 const outPath = join(root, 'gallery.json');

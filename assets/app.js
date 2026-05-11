@@ -45,13 +45,15 @@
   }
 
   function currentFolder() {
-    const path = location.pathname.replace(/\/+$/, '');
-    const parts = path.split('/').filter(Boolean);
-    if (parts.length === 0) return null;
-    const last = parts[parts.length - 1];
-    if (last === REPO_NAME) return null;
+    const base = basePath(); // e.g. "/pdfgallery/"
+    const pathname = location.pathname;
+    if (!pathname.startsWith(base.slice(0, -1))) return null;
+    const relative = pathname.slice(base.length).replace(/\/+$/, '');
+    if (!relative) return null;
+    const segments = relative.split('/').map(s => decodeURIComponent(s));
+    const last = segments[segments.length - 1];
     if (RESERVED_DIRS.has(last)) return null;
-    return decodeURIComponent(last);
+    return segments.join('/');
   }
 
   function isLocalDev() {
@@ -134,7 +136,7 @@
     if (!entry || !Array.isArray(entry.pdfs)) return [];
     return entry.pdfs.slice().sort().map(name => ({
       name,
-      downloadUrl: basePath() + encodeURIComponent(folder) + '/' + encodeURIComponent(name),
+      downloadUrl: basePath() + folder.split('/').map(encodeURIComponent).join('/') + '/' + encodeURIComponent(name),
     }));
   }
 
@@ -466,7 +468,7 @@
     }
     const list = el('ul', { class: 'folder-list' });
     for (const f of folders) {
-      list.appendChild(el('li', null, el('a', { href: basePath() + encodeURIComponent(f) + '/' }, f)));
+      list.appendChild(el('li', null, el('a', { href: basePath() + f.split('/').map(encodeURIComponent).join('/') + '/' }, f)));
     }
     main.appendChild(list);
   }
