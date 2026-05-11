@@ -33,5 +33,16 @@
       "store manager.pdf",
       "waiter in our cafe Toosoon.pdf"
     ]
+  },
+  "C/CV": {
+    "pdfs": [
+      "CV Kennedy.pdf",
+      "Curriculum Jana - Vapstore.pdf",
+      "Curriculum Jana - store manager.pdf",
+      "Eric Segura Ferreira - CV.pdf",
+      "Marjorie CV.pdf",
+      "Neizan CV.pdf",
+      "Sara CV.pdf"
+    ]
   }
 }
