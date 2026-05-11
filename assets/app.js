@@ -4,7 +4,7 @@
   const REPO_OWNER = 'audiophrases';
   const REPO_NAME = 'pdfgallery';
   const REPO_BRANCH = 'main';
-  const ADMIN_PASSWORD = '12345';
+  const ADMIN_PASSWORD_SHA256 = '5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5';
   const COMMENTS_PATH = 'comments.json';
   const PDF_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const RESERVED_DIRS = new Set(['assets', 'scripts', '.git', '.github', 'node_modules']);
@@ -336,16 +336,54 @@
 
   function isAdmin() { return adminUnlocked; }
 
-  function promptLogin() {
-    const pw = prompt('Admin password:');
+  async function sha256Hex(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function promptLogin() {
+    const pw = await passwordPrompt('Admin password:');
     if (pw === null) return;
-    if (pw === ADMIN_PASSWORD) {
+    const hash = await sha256Hex(pw);
+    if (hash === ADMIN_PASSWORD_SHA256) {
       adminUnlocked = true;
       sessionStorage.setItem('pdfgallery_admin', '1');
       rerender();
     } else {
       alert('Incorrect password.');
     }
+  }
+
+  function passwordPrompt(message) {
+    return new Promise((resolve) => {
+      const overlay = el('div', { class: 'pw-modal-overlay' });
+      const input = el('input', { type: 'password', class: 'pw-modal-input', autocomplete: 'current-password' });
+      const okBtn = el('button', { class: 'admin-btn' }, 'OK');
+      const cancelBtn = el('button', { class: 'admin-btn' }, 'Cancel');
+      const dialog = el('div', { class: 'pw-modal' },
+        el('div', { class: 'pw-modal-msg' }, message),
+        input,
+        el('div', { class: 'pw-modal-actions' }, cancelBtn, okBtn)
+      );
+      overlay.appendChild(dialog);
+
+      function close(value) {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+        resolve(value);
+      }
+      function onKey(e) {
+        if (e.key === 'Enter') { e.preventDefault(); close(input.value); }
+        else if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      }
+      okBtn.addEventListener('click', () => close(input.value));
+      cancelBtn.addEventListener('click', () => close(null));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+      document.addEventListener('keydown', onKey);
+
+      document.body.appendChild(overlay);
+      input.focus();
+    });
   }
 
   function promptToken() {
